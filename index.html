@@ -1,0 +1,252 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitoring Pembebanan Area Panggul</title>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #f1f5f9;
+      color: #1e293b;
+      font-family: Arial, sans-serif;
+    }
+    .container { max-width: 1200px; margin: auto; }
+    .card {
+      background: white;
+      padding: 18px;
+      margin-bottom: 16px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px #0001;
+    }
+    h1 { font-size: 25px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .sensor { min-width: 0; }
+    .status { color: #64748b; font-size: 14px; }
+    button {
+      padding: 11px 16px;
+      margin: 4px 4px 4px 0;
+      background: #2563eb;
+      color: white;
+      border: 0;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    @media (max-width: 700px) {
+      .grid { grid-template-columns: 1fr; }
+      body { padding: 9px; }
+    }
+  </style>
+</head>
+
+<body>
+<div class="container">
+  <div class="card">
+    <h1>Monitoring Pembebanan Area Panggul</h1>
+    <p>Empat sensor FSR402 — gaya aktual dan baseline</p>
+    <p id="connection" class="status">Menyiapkan koneksi...</p>
+    <p>Jumlah data: <strong id="count">0</strong></p>
+    <p>Waktu terakhir: <strong id="lastTime">-</strong></p>
+    <button onclick="downloadCSV()">Unduh CSV</button>
+    <button onclick="location.reload()">Muat ulang</button>
+  </div>
+
+  <div class="grid" id="chartArea"></div>
+</div>
+
+<script>
+// GANTI nilai berikut memakai konfigurasi web Firebase milikmu.
+const firebaseConfig = {
+  apiKey: "ISI_API_KEY",
+  authDomain: "monitoring-fsr-panggul.firebaseapp.com",
+  databaseURL: "https://monitoring-fsr-panggul-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "monitoring-fsr-panggul",
+  appId: "ISI_APP_ID"
+};
+
+// Lokasi data yang akan dibaca dari Firebase.
+// Program ESP32 nantinya perlu mengirim data ke lokasi ini.
+const DATA_PATH = "sessions/latest/records";
+
+const sensorColors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea"];
+const sensorNames = ["FSR1", "FSR2", "FSR3", "FSR4"];
+const charts = [];
+let csvRows = [];
+
+for (let i = 0; i < 4; i++) {
+  const box = document.createElement("div");
+  box.className = "card sensor";
+  box.innerHTML =
+    "<h3>" + sensorNames[i] + "</h3>" +
+    '<canvas id="chart' + i + '"></canvas>';
+  document.getElementById("chartArea").appendChild(box);
+
+  charts.push(new Chart(document.getElementById("chart" + i), {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Gaya aktual (N)",
+          data: [],
+          borderColor: sensorColors[i],
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.1
+        },
+        {
+          label: "Baseline (N)",
+          data: [],
+          borderColor: sensorColors[i],
+          borderDash: [7, 5],
+          borderWidth: 1.5,
+          pointRadius: 0
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      parsing: false,
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: true, text: "Waktu sejak START (detik)" }
+        },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "Gaya (N)" }
+        }
+      }
+    }
+  }));
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function renderRecords(data) {
+  if (!data) {
+    document.getElementById("connection").textContent =
+      "Terhubung, tetapi belum ada data pada lokasi yang dipilih.";
+    return;
+  }
+
+  const records = Array.isArray(data)
+    ? data
+    : Object.values(data);
+
+  records.sort((a, b) =>
+    Number(a.elapsed_seconds || 0) -
+    Number(b.elapsed_seconds || 0)
+  );
+
+  csvRows = [];
+  charts.forEach(chart => {
+    chart.data.datasets[0].data = [];
+    chart.data.datasets[1].data = [];
+  });
+
+  for (const row of records) {
+    const t = numberOrNull(row.elapsed_seconds);
+    if (t === null) continue;
+
+    const csvRow = { ...row };
+
+    for (let i = 0; i < 4; i++) {
+      const actual = numberOrNull(row["FSR" + (i + 1) + "_N"]);
+      const base = numberOrNull(row["baseline_FSR" + (i + 1) + "_N"]);
+
+      if (actual !== null) {
+        charts[i].data.datasets[0].data.push({ x: t, y: actual });
+      }
+      if (base !== null) {
+        charts[i].data.datasets[1].data.push({ x: t, y: base });
+      }
+    }
+    csvRows.push(csvRow);
+  }
+
+  charts.forEach(chart => chart.update("none"));
+  document.getElementById("count").textContent = csvRows.length;
+
+  if (csvRows.length) {
+    const last = csvRows[csvRows.length - 1];
+    document.getElementById("lastTime").textContent =
+      (last.timestamp_wib || "-") + " (" +
+      last.elapsed_seconds + " detik)";
+  }
+}
+
+function downloadCSV() {
+  if (!csvRows.length) {
+    alert("Belum ada data Firebase untuk diunduh.");
+    return;
+  }
+
+  const headers = Object.keys(csvRows[0]);
+  const escapeCSV = value => {
+    const s = String(value ?? "");
+    return '"' + s.replace(/"/g, '""') + '"';
+  };
+
+  const lines = [
+    headers.map(escapeCSV).join(","),
+    ...csvRows.map(row =>
+      headers.map(h => escapeCSV(row[h])).join(",")
+    )
+  ];
+
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8;"
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "monitoring_fsr.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+try {
+  if (firebaseConfig.apiKey === "ISI_API_KEY" ||
+      firebaseConfig.appId === "ISI_APP_ID") {
+    document.getElementById("connection").textContent =
+      "Belum dikonfigurasi: isi apiKey dan appId dari Firebase.";
+  } else {
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    db.ref(DATA_PATH).on("value",
+      snapshot => {
+        document.getElementById("connection").textContent =
+          "Terhubung ke Firebase — menunggu data ESP32.";
+        renderRecords(snapshot.val());
+      },
+      error => {
+        document.getElementById("connection").textContent =
+          "Gagal membaca Firebase: " + error.message +
+          ". Periksa autentikasi dan aturan database.";
+      }
+    );
+  }
+} catch (error) {
+  document.getElementById("connection").textContent =
+    "Kesalahan konfigurasi: " + error.message;
+}
+</script>
+</body>
+</html>
