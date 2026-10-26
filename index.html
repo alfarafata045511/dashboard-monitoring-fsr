@@ -1,487 +1,106 @@
-
 <!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Monitoring Pembebanan Area Panggul</title>
-
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
   <style>
-    body {
-      margin: 0;
-      padding: 16px;
-      background: #f1f5f9;
-      color: #1e293b;
-      font-family: Arial, sans-serif;
-    }
-
-    .container {
-      max-width: 1400px;
-      margin: auto;
-    }
-
-    .card {
-      background: white;
-      padding: 18px;
-      margin-bottom: 16px;
-      border-radius: 12px;
-      box-shadow: 0 2px 8px #0001;
-    }
-
-    h1 { font-size: 25px; }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-    }
-
-    .sensor { min-width: 0; }
-
-    .status {
-      color: #64748b;
-      font-size: 14px;
-      overflow-wrap: anywhere;
-    }
-
-    button {
-      padding: 11px 16px;
-      margin: 4px 4px 4px 0;
-      background: #2563eb;
-      color: white;
-      border: 0;
-      border-radius: 7px;
-      cursor: pointer;
-    }
-
-    button:hover { background: #1d4ed8; }
-
-    .combined-title {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-
-    .combined-wrap {
-      position: relative;
-      width: 100%;
-      height: 480px;
-    }
-
-    @media (max-width: 700px) {
-      .grid { grid-template-columns: 1fr; }
-      body { padding: 9px; }
-      .combined-wrap { height: 380px; }
-    }
+    body{margin:0;padding:16px;background:#f1f5f9;color:#1e293b;font-family:Arial,sans-serif}
+    .container{max-width:1400px;margin:auto}.card{background:#fff;padding:18px;margin-bottom:16px;border-radius:12px;box-shadow:0 2px 8px #0001}
+    h1{font-size:25px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.sensor{min-width:0;height:340px}
+    .status{color:#64748b;font-size:14px;overflow-wrap:anywhere}button{padding:11px 16px;margin:4px 4px 4px 0;background:#2563eb;color:#fff;border:0;border-radius:7px;cursor:pointer}
+    .combined-title{text-align:center;margin-bottom:20px}.combined-wrap{position:relative;width:100%;height:480px}
+    .warning{padding:10px 12px;background:#fff7ed;border-left:4px solid #f97316;border-radius:5px;color:#9a3412}
+    @media(max-width:700px){.grid{grid-template-columns:1fr}body{padding:9px}.combined-wrap{height:380px}.sensor{height:300px}}
   </style>
 </head>
-
-<body>
-<div class="container">
-
+<body><div class="container">
   <div class="card">
     <h1>Monitoring Pembebanan Area Panggul</h1>
     <p>Empat sensor FSR402 — gaya aktual dan baseline</p>
-
-    <p id="connection" class="status">
-      Menyiapkan koneksi Firebase...
-    </p>
-
-    <p>Jumlah data: <strong id="count">0</strong></p>
+    <p id="connection" class="status">Menyiapkan koneksi Firebase...</p>
+    <p>Jumlah data pada sesi aktif: <strong id="count">0</strong></p>
     <p>Waktu terakhir: <strong id="lastTime">-</strong></p>
-
-    <button onclick="downloadCSV()">Unduh CSV</button>
+    <p class="warning"><strong>Catatan reset:</strong> saat tombol START pada ESP32 ditekan, data di jalur Firebase <code>sessions/latest/records</code> dihapus lalu sesi baru dimulai. Data sesi lama pada jalur tersebut tidak dapat dipulihkan. CSV yang sudah terkirim ke Telegram tidak ikut terhapus.</p>
+    <button onclick="downloadCSV()">Unduh CSV sesi aktif</button>
     <button onclick="location.reload()">Muat ulang</button>
   </div>
-
-  <!-- Empat grafik individual -->
   <div class="grid" id="chartArea"></div>
-
-  <!-- Grafik gabungan dengan delapan garis -->
-  <div class="card">
-    <h2 class="combined-title">
-      Gaya setiap FSR dan baseline masing-masing sensor
-    </h2>
-
-    <div class="combined-wrap">
-      <canvas id="combinedChart"></canvas>
-    </div>
-  </div>
-
+  <div class="card"><h2 class="combined-title">Gaya setiap FSR dan baseline masing-masing sensor</h2><div class="combined-wrap"><canvas id="combinedChart"></canvas></div></div>
 </div>
-
 <script>
-// ================= FIREBASE CONFIG =================
 const firebaseConfig = {
-  apiKey: "AIzaSyD86onYPpQqfOYp7O7a7psFg0MvSbxofxI",
+  apiKey: "AIzaSyD86onYPqPqfOYpO7a7psFg0MvSbxofxI",
   authDomain: "monitoring-fsr-panggul.firebaseapp.com",
   databaseURL: "https://monitoring-fsr-panggul-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "monitoring-fsr-panggul",
-  appId: "1:62738399905:web:75142cfe235731b236a6e0",
+  appId: "1:62738399905:web:75142cfe235731b236a6e0"
 };
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const recordsRef = db.ref('sessions/latest/records');
+const sensorCharts = [];
+let combinedChart = null;
+let currentRows = [];
+const colors = ['#2563eb','#dc2626','#16a34a','#9333ea'];
 
-// Lokasi data Firebase yang digunakan ESP32
-const DATA_PATH = "sessions/latest/records";
-
-const sensorColors = [
-  "#2563eb", // FSR1: biru
-  "#dc2626", // FSR2: merah
-  "#16a34a", // FSR3: hijau
-  "#9333ea"  // FSR4: ungu
-];
-
-const sensorNames = ["FSR1", "FSR2", "FSR3", "FSR4"];
-
-const charts = [];
-let csvRows = [];
-
-// ================= EMPAT GRAFIK INDIVIDUAL =================
-for (let i = 0; i < 4; i++) {
-  const box = document.createElement("div");
-  box.className = "card sensor";
-
-  box.innerHTML =
-    "<h3>" + sensorNames[i] + "</h3>" +
-    '<canvas id="chart' + i + '"></canvas>';
-
-  document.getElementById("chartArea").appendChild(box);
-
-  charts.push(new Chart(
-    document.getElementById("chart" + i),
-    {
-      type: "line",
-      data: {
-        datasets: [
-          {
-            label: "Gaya aktual (N)",
-            data: [],
-            borderColor: sensorColors[i],
-            backgroundColor: sensorColors[i],
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0
-          },
-          {
-            label: "Baseline " + (i + 1) + " (N)",
-            data: [],
-            borderColor: sensorColors[i],
-            backgroundColor: sensorColors[i],
-            borderDash: [7, 5],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        animation: false,
-        parsing: false,
-        interaction: {
-          mode: "nearest",
-          intersect: false
-        },
-        scales: {
-          x: {
-            type: "linear",
-            title: {
-              display: true,
-              text: "Waktu sejak START (detik)"
-            }
-          },
-          y: {
-            beginAtZero: true,
-            title: {
-              display: true,
-              text: "Gaya (N)"
-            }
-          }
-        }
-      }
-    }
-  ));
+function makeChartCard(i){
+  const card=document.createElement('div'); card.className='card sensor';
+  const title=document.createElement('h2'); title.textContent='FSR'+(i+1); card.appendChild(title);
+  const canvas=document.createElement('canvas'); canvas.id='chart'+i; card.appendChild(canvas);
+  document.getElementById('chartArea').appendChild(card);
+  const ctx=canvas.getContext('2d');
+  sensorCharts[i]=new Chart(ctx,{type:'line',data:{labels:[],datasets:[
+    {label:'Gaya aktual (N)',data:[],borderColor:colors[i],backgroundColor:colors[i],borderWidth:1.5,pointRadius:0,tension:0},
+    {label:'Baseline '+(i+1)+' (N)',data:[],borderColor:colors[i],borderDash:[7,5],borderWidth:1.5,pointRadius:0,tension:0}
+  ]},options:chartOptions()});
 }
-
-// ================= GRAFIK GABUNGAN =================
-// Delapan dataset: aktual dan baseline untuk setiap sensor.
-const combinedDatasets = [];
-
-for (let i = 0; i < 4; i++) {
-  combinedDatasets.push({
-    label: sensorNames[i] + " (gaya aktual, N)",
-    data: [],
-    borderColor: sensorColors[i],
-    backgroundColor: sensorColors[i],
-    borderWidth: 2,
-    pointRadius: 0,
-    tension: 0
-  });
-
-  combinedDatasets.push({
-    label: "Baseline " + (i + 1) + " (N)",
-    data: [],
-    borderColor: sensorColors[i],
-    backgroundColor: sensorColors[i],
-    borderDash: [7, 5],
-    borderWidth: 1.5,
-    pointRadius: 0,
-    tension: 0
-  });
+function chartOptions(){return {responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},scales:{x:{title:{display:true,text:'Waktu sejak START (detik)'}},y:{title:{display:true,text:'Gaya (N)'},beginAtZero:true}},plugins:{legend:{position:'top'}}};}
+for(let i=0;i<4;i++) makeChartCard(i);
+const combinedDatasets=[];
+for(let i=0;i<4;i++){
+  combinedDatasets.push({label:'FSR'+(i+1)+' aktual (N)',data:[],borderColor:colors[i],borderWidth:1.5,pointRadius:0,tension:0});
+  combinedDatasets.push({label:'Baseline FSR'+(i+1)+' (N)',data:[],borderColor:colors[i],borderDash:[7,5],borderWidth:1.5,pointRadius:0,tension:0});
 }
-
-const combinedChart = new Chart(
-  document.getElementById("combinedChart"),
-  {
-    type: "line",
-    data: {
-      datasets: combinedDatasets
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      parsing: false,
-      interaction: {
-        mode: "nearest",
-        intersect: false,
-        axis: "x"
-      },
-      plugins: {
-        legend: {
-          display: true,
-          position: "top",
-          labels: {
-            usePointStyle: false,
-            boxWidth: 35,
-            padding: 12
-          }
-        },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              return context.dataset.label + ": " +
-                context.parsed.y.toFixed(3) + " N";
-            }
-          }
-        }
-      },
-      scales: {
-        x: {
-          type: "linear",
-          title: {
-            display: true,
-            text: "Waktu sejak START (detik)"
-          }
-        },
-        y: {
-          beginAtZero: true,
-          title: {
-            display: true,
-            text: "Gaya (N)"
-          }
-        }
-      }
-    }
+combinedChart=new Chart(document.getElementById('combinedChart').getContext('2d'),{type:'line',data:{labels:[],datasets:combinedDatasets},options:chartOptions()});
+function numberOrNull(v){const n=Number(v);return Number.isFinite(n)?n:null;}
+function renderRecords(obj){
+  const records=Object.values(obj||{}).filter(v=>v&&typeof v==='object');
+  records.sort((a,b)=>(numberOrNull(a.elapsed_seconds)??0)-(numberOrNull(b.elapsed_seconds)??0));
+  currentRows=records;
+  const labels=records.map((r,index)=>numberOrNull(r.elapsed_seconds)??index);
+  document.getElementById('count').textContent=String(records.length);
+  document.getElementById('lastTime').textContent=records.length?(records[records.length-1].timestamp||'-'):'-';
+  for(let i=0;i<4;i++){
+    const chart=sensorCharts[i];
+    chart.data.labels=labels;
+    chart.data.datasets[0].data=records.map(r=>numberOrNull(r['FSR'+(i+1)+'_N']));
+    chart.data.datasets[1].data=records.map(r=>numberOrNull(r['baseline_FSR'+(i+1)+'_N']));
+    chart.update('none');
   }
-);
-
-// ================= PEMBACAAN DATA =================
-function numberOrNull(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
+  combinedChart.data.labels=labels;
+  for(let i=0;i<4;i++){
+    combinedChart.data.datasets[i*2].data=records.map(r=>numberOrNull(r['FSR'+(i+1)+'_N']));
+    combinedChart.data.datasets[i*2+1].data=records.map(r=>numberOrNull(r['baseline_FSR'+(i+1)+'_N']));
   }
-
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+  combinedChart.update('none');
 }
-
-function renderRecords(data) {
-  if (!data) {
-    csvRows = [];
-
-    document.getElementById("connection").textContent =
-      "Terhubung, tetapi belum ada data pada lokasi yang dipilih.";
-
-    document.getElementById("count").textContent = "0";
-    document.getElementById("lastTime").textContent = "-";
-
-    charts.forEach(chart => {
-      chart.data.datasets.forEach(dataset => {
-        dataset.data = [];
-      });
-      chart.update("none");
-    });
-
-    combinedChart.data.datasets.forEach(dataset => {
-      dataset.data = [];
-    });
-    combinedChart.update("none");
-
-    return;
-  }
-
-  const records = Array.isArray(data)
-    ? data
-    : Object.values(data);
-
-  records.sort((a, b) =>
-    Number(a.elapsed_seconds || 0) -
-    Number(b.elapsed_seconds || 0)
-  );
-
-  csvRows = [];
-
-  // Kosongkan empat grafik individual.
-  charts.forEach(chart => {
-    chart.data.datasets[0].data = [];
-    chart.data.datasets[1].data = [];
-  });
-
-  // Kosongkan grafik gabungan.
-  combinedChart.data.datasets.forEach(dataset => {
-    dataset.data = [];
-  });
-
-  for (const row of records) {
-    const t = numberOrNull(row.elapsed_seconds);
-
-    if (t === null) continue;
-
-    const csvRow = { ...row };
-
-    for (let i = 0; i < 4; i++) {
-      const actual = numberOrNull(
-        row["FSR" + (i + 1) + "_N"]
-      );
-
-      const base = numberOrNull(
-        row["baseline_FSR" + (i + 1) + "_N"]
-      );
-
-      // Grafik individual.
-      if (actual !== null) {
-        charts[i].data.datasets[0].data.push({
-          x: t,
-          y: actual
-        });
-      }
-
-      if (base !== null) {
-        charts[i].data.datasets[1].data.push({
-          x: t,
-          y: base
-        });
-      }
-
-      // Grafik gabungan:
-      // indeks genap = gaya aktual,
-      // indeks ganjil = baseline.
-      const actualIndex = i * 2;
-      const baselineIndex = i * 2 + 1;
-
-      if (actual !== null) {
-        combinedChart.data.datasets[actualIndex].data.push({
-          x: t,
-          y: actual
-        });
-      }
-
-      if (base !== null) {
-        combinedChart.data.datasets[baselineIndex].data.push({
-          x: t,
-          y: base
-        });
-      }
-    }
-
-    csvRows.push(csvRow);
-  }
-
-  // Perbarui grafik.
-  charts.forEach(chart => chart.update("none"));
-  combinedChart.update("none");
-
-  document.getElementById("count").textContent =
-    csvRows.length;
-
-  if (csvRows.length) {
-    const last = csvRows[csvRows.length - 1];
-
-    document.getElementById("lastTime").textContent =
-      (last.timestamp_wib || "-") +
-      " (" + last.elapsed_seconds + " detik)";
-  } else {
-    document.getElementById("lastTime").textContent = "-";
-  }
+recordsRef.on('value',snapshot=>{
+  renderRecords(snapshot.val());
+  document.getElementById('connection').textContent='Terhubung ke Firebase. Menampilkan data pada sesi aktif.';
+},error=>{
+  document.getElementById('connection').textContent='Gagal membaca Firebase: '+error.message+' — periksa aturan akses (Rules).';
+});
+function downloadCSV(){
+  if(!currentRows.length){alert('Belum ada data pada sesi aktif.');return;}
+  const headers=['timestamp','elapsed_seconds','raw_FSR1','raw_FSR2','raw_FSR3','raw_FSR4','FSR1_N','FSR2_N','FSR3_N','FSR4_N','baseline_FSR1_N','baseline_FSR2_N','baseline_FSR3_N','baseline_FSR4_N','delta_FSR1_N','delta_FSR2_N','delta_FSR3_N','delta_FSR4_N','FSR1_status','FSR2_status','FSR3_status','FSR4_status'];
+  const quote=v=>{const s=(v===undefined||v===null)?'':String(v);return '"'+s.replace(/"/g,'""')+'"';};
+  const lines=[headers.map(quote).join(',')];
+  for(const r of currentRows) lines.push(headers.map(k=>quote(r[k])).join(','));
+  const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='fsr402_sesi_aktif.csv';a.click();URL.revokeObjectURL(url);
 }
-
-// ================= UNDUH CSV =================
-function downloadCSV() {
-  if (!csvRows.length) {
-    alert("Belum ada data Firebase untuk diunduh.");
-    return;
-  }
-
-  const headers = [
-    ...new Set(csvRows.flatMap(row => Object.keys(row)))
-  ];
-
-  const escapeCSV = value => {
-    const s = String(value ?? "");
-    return '"' + s.replace(/"/g, '""') + '"';
-  };
-
-  const lines = [
-    headers.map(escapeCSV).join(","),
-    ...csvRows.map(row =>
-      headers.map(h => escapeCSV(row[h])).join(",")
-    )
-  ];
-
-  const blob = new Blob(
-    ["\uFEFF" + lines.join("\r\n")],
-    { type: "text/csv;charset=utf-8;" }
-  );
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-
-  a.href = url;
-  a.download = "monitoring_fsr.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-// ================= KONEKSI FIREBASE =================
-try {
-  firebase.initializeApp(firebaseConfig);
-
-  const db = firebase.database();
-
-  db.ref(DATA_PATH).on(
-    "value",
-    snapshot => {
-      document.getElementById("connection").textContent =
-        "Terhubung ke Firebase — data diperbarui.";
-
-      renderRecords(snapshot.val());
-    },
-    error => {
-      document.getElementById("connection").textContent =
-        "Gagal membaca Firebase: " + error.message +
-        ". Periksa autentikasi dan aturan database.";
-    }
-  );
-} catch (error) {
-  document.getElementById("connection").textContent =
-    "Kesalahan konfigurasi: " + error.message;
-}
-</script>
-</body>
-</html>
+</script></body></html>
