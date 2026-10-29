@@ -20,7 +20,7 @@
 <body><div class="container">
   <div class="card">
     <h1>Monitoring Pembebanan Area Panggul</h1>
-    <p>Empat sensor FSR402 — gaya aktual dan baseline</p>
+    <p>Empat sensor FSR402 — gaya aktual, baseline, dan batas toleransi ±5%</p>
     <p id="connection" class="status">Menyiapkan koneksi Firebase...</p>
     <p>Jumlah data pada sesi aktif: <strong id="count">0</strong></p>
     <p>Waktu terakhir: <strong id="lastTime">-</strong></p>
@@ -29,7 +29,7 @@
     <button onclick="location.reload()">Muat ulang</button>
   </div>
   <div class="grid" id="chartArea"></div>
-  <div class="card"><h2 class="combined-title">Gaya setiap FSR dan baseline masing-masing sensor</h2><div class="combined-wrap"><canvas id="combinedChart"></canvas></div></div>
+  <div class="card"><h2 class="combined-title">Gaya setiap FSR, baseline, dan batas ±5% masing-masing sensor</h2><div class="combined-wrap"><canvas id="combinedChart"></canvas></div></div>
 </div>
 <script>
 const firebaseConfig = {
@@ -54,8 +54,10 @@ function makeChartCard(i){
   document.getElementById('chartArea').appendChild(card);
   const ctx=canvas.getContext('2d');
   sensorCharts[i]=new Chart(ctx,{type:'line',data:{labels:[],datasets:[
-    {label:'Gaya aktual (N)',data:[],borderColor:colors[i],backgroundColor:colors[i],borderWidth:1.5,pointRadius:0,tension:0},
-    {label:'Baseline '+(i+1)+' (N)',data:[],borderColor:colors[i],borderDash:[7,5],borderWidth:1.5,pointRadius:0,tension:0}
+    {label:'Gaya aktual (N)',data:[],borderColor:colors[i],backgroundColor:colors[i],borderWidth:1.8,pointRadius:0,tension:0},
+    {label:'Baseline FSR'+(i+1)+' (N)',data:[],borderColor:'#475569',borderDash:[7,5],borderWidth:1.8,pointRadius:0,tension:0},
+    {label:'Batas atas +5%',data:[],borderColor:'#ea580c',borderDash:[4,4],borderWidth:1.3,pointRadius:0,tension:0},
+    {label:'Batas bawah -5%',data:[],borderColor:'#0891b2',borderDash:[4,4],borderWidth:1.3,pointRadius:0,tension:0}
   ]},options:chartOptions()});
 }
 function chartOptions(){return {responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},scales:{x:{title:{display:true,text:'Waktu sejak START (detik)'}},y:{title:{display:true,text:'Gaya (N)'},beginAtZero:true}},plugins:{legend:{position:'top'}}};}
@@ -64,6 +66,8 @@ const combinedDatasets=[];
 for(let i=0;i<4;i++){
   combinedDatasets.push({label:'FSR'+(i+1)+' aktual (N)',data:[],borderColor:colors[i],borderWidth:1.5,pointRadius:0,tension:0});
   combinedDatasets.push({label:'Baseline FSR'+(i+1)+' (N)',data:[],borderColor:colors[i],borderDash:[7,5],borderWidth:1.5,pointRadius:0,tension:0});
+  combinedDatasets.push({label:'FSR'+(i+1)+' batas atas +5%',data:[],borderColor:colors[i],borderDash:[3,5],borderWidth:1,pointRadius:0,tension:0,borderColor:'#ea580c'});
+  combinedDatasets.push({label:'FSR'+(i+1)+' batas bawah -5%',data:[],borderColor:'#0891b2',borderDash:[3,5],borderWidth:1,pointRadius:0,tension:0});
 }
 combinedChart=new Chart(document.getElementById('combinedChart').getContext('2d'),{type:'line',data:{labels:[],datasets:combinedDatasets},options:chartOptions()});
 function numberOrNull(v){const n=Number(v);return Number.isFinite(n)?n:null;}
@@ -77,14 +81,21 @@ function renderRecords(obj){
   for(let i=0;i<4;i++){
     const chart=sensorCharts[i];
     chart.data.labels=labels;
+    const baselineValues=records.map(r=>numberOrNull(r['baseline_FSR'+(i+1)+'_N']));
     chart.data.datasets[0].data=records.map(r=>numberOrNull(r['FSR'+(i+1)+'_N']));
-    chart.data.datasets[1].data=records.map(r=>numberOrNull(r['baseline_FSR'+(i+1)+'_N']));
+    chart.data.datasets[1].data=baselineValues;
+    chart.data.datasets[2].data=baselineValues.map(v=>v===null?null:v*1.05);
+    chart.data.datasets[3].data=baselineValues.map(v=>v===null?null:v*0.95);
     chart.update('none');
   }
   combinedChart.data.labels=labels;
   for(let i=0;i<4;i++){
-    combinedChart.data.datasets[i*2].data=records.map(r=>numberOrNull(r['FSR'+(i+1)+'_N']));
-    combinedChart.data.datasets[i*2+1].data=records.map(r=>numberOrNull(r['baseline_FSR'+(i+1)+'_N']));
+    const baselineValues=records.map(r=>numberOrNull(r['baseline_FSR'+(i+1)+'_N']));
+    const baseIndex=i*4;
+    combinedChart.data.datasets[baseIndex].data=records.map(r=>numberOrNull(r['FSR'+(i+1)+'_N']));
+    combinedChart.data.datasets[baseIndex+1].data=baselineValues;
+    combinedChart.data.datasets[baseIndex+2].data=baselineValues.map(v=>v===null?null:v*1.05);
+    combinedChart.data.datasets[baseIndex+3].data=baselineValues.map(v=>v===null?null:v*0.95);
   }
   combinedChart.update('none');
 }
